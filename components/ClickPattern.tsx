@@ -207,9 +207,6 @@ export default function ClickPattern({ coda, siblings }: Props) {
           )}
           <span>real recording</span>
         </button>
-        <span className="ml-auto text-[10px] text-white/35 truncate">
-          synth uses this coda's icis · recording: noaa pd
-        </span>
       </div>
     </div>
   );

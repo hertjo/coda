@@ -3,6 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DialogueCoda, DialogueDataset } from "@/lib/dataset";
 import { biolumin, rgbToCss } from "@/lib/colormap";
+import {
+  audioContextTime,
+  playDialogue,
+  type DialogueController,
+} from "@/lib/audio";
 
 type Props = {
   data: DialogueDataset;
@@ -20,6 +25,68 @@ export default function DialogueRibbon({ data }: Props) {
   const rec = recordings[recIdx];
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const controllerRef = useRef<DialogueController | null>(null);
+  const [playing, setPlaying] = useState(false);
+  // Bumped each animation frame during playback so the cursor redraws.
+  const [, setTick] = useState(0);
+
+  // Stop playback when switching recordings or unmounting.
+  useEffect(() => {
+    return () => {
+      controllerRef.current?.stop();
+      controllerRef.current = null;
+    };
+  }, []);
+  useEffect(() => {
+    controllerRef.current?.stop();
+    controllerRef.current = null;
+    setPlaying(false);
+  }, [recIdx]);
+
+  // Animation loop while playing so the sweeping cursor moves.
+  useEffect(() => {
+    if (!playing) return;
+    let raf = 0;
+    const loop = () => {
+      setTick((t) => t + 1);
+      const c = controllerRef.current;
+      if (c) {
+        const elapsedSim = (audioContextTime() - c.startedAt) * c.speed;
+        const simSpan =
+          rec && rec.list.length > 0
+            ? rec.list[rec.list.length - 1].startSeconds +
+              rec.list[rec.list.length - 1].duration -
+              rec.list[0].startSeconds
+            : 0;
+        if (elapsedSim >= simSpan + 0.4) {
+          controllerRef.current = null;
+          setPlaying(false);
+          return;
+        }
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [playing, rec]);
+
+  const togglePlay = () => {
+    if (!rec) return;
+    if (playing) {
+      controllerRef.current?.stop();
+      controllerRef.current = null;
+      setPlaying(false);
+      return;
+    }
+    const events = rec.list.map((c) => ({
+      startSec: c.startSeconds,
+      icis: c.icis,
+      whale: c.whale,
+    }));
+    const ctrl = playDialogue(events, 6);
+    controllerRef.current = ctrl;
+    setPlaying(true);
+  };
 
   const whales = useMemo(() => {
     if (!rec) return [];
@@ -64,8 +131,8 @@ export default function DialogueRibbon({ data }: Props) {
 
       const padL = 56 * dpr;
       const padR = 22 * dpr;
-      const padT = 14 * dpr;
-      const padB = 22 * dpr;
+      const padT = 22 * dpr;
+      const padB = 10 * dpr;
       const span = Math.max(0.001, timeRange.t1 - timeRange.t0);
       const project = (t: number) =>
         padL + ((t - timeRange.t0) / span) * (canvas.width - padL - padR);
@@ -153,14 +220,36 @@ export default function DialogueRibbon({ data }: Props) {
       }
       ctx.setLineDash([]);
 
-      // Time axis ticks.
+      // Time axis ticks along the top so they do not crowd the prev/next
+      // button row that sits immediately below the canvas.
       ctx.fillStyle = "rgba(255,255,255,0.45)";
       ctx.font = `${Math.round(9 * dpr)}px ui-sans-serif`;
       ctx.textAlign = "center";
       const tickStep = chooseTickStep(span);
       for (let t = Math.ceil(timeRange.t0 / tickStep) * tickStep; t < timeRange.t1; t += tickStep) {
         const x = project(t);
-        ctx.fillText(`${t.toFixed(0)}s`, x, canvas.height - 4 * dpr);
+        ctx.fillText(`${t.toFixed(0)}s`, x, padT - 4 * dpr);
+      }
+
+      // Sweeping playback cursor.
+      const ctrl = controllerRef.current;
+      if (ctrl) {
+        const simNow = ctrl.origin + (audioContextTime() - ctrl.startedAt) * ctrl.speed;
+        if (simNow >= timeRange.t0 && simNow <= timeRange.t1) {
+          const cx = project(simNow);
+          const grad = ctx.createLinearGradient(cx - 18 * dpr, 0, cx + 18 * dpr, 0);
+          grad.addColorStop(0, "rgba(255,200,255,0)");
+          grad.addColorStop(0.5, "rgba(255,200,255,0.55)");
+          grad.addColorStop(1, "rgba(255,200,255,0)");
+          ctx.fillStyle = grad;
+          ctx.fillRect(cx - 18 * dpr, padT, 36 * dpr, canvas.height - padT - padB);
+          ctx.strokeStyle = "rgba(255,255,255,0.85)";
+          ctx.lineWidth = 1 * dpr;
+          ctx.beginPath();
+          ctx.moveTo(cx, padT);
+          ctx.lineTo(cx, canvas.height - padB);
+          ctx.stroke();
+        }
       }
 
       raf = requestAnimationFrame(draw);
@@ -173,6 +262,24 @@ export default function DialogueRibbon({ data }: Props) {
     <div className="w-full h-full flex flex-col">
       <canvas ref={canvasRef} className="w-full flex-1 min-h-0 rounded-lg" />
       <div className="flex items-center gap-2 mt-2 shrink-0">
+        <button
+          onClick={togglePlay}
+          disabled={!rec}
+          className="inline-flex items-center gap-1.5 rounded-md border border-cyan-400/55 bg-cyan-400/15 px-2 py-1 text-[10.5px] font-medium text-cyan-100 hover:bg-cyan-400/25 hover:text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-transparent disabled:text-white/40"
+          title="6x synthesised playback with stereo separation per whale"
+        >
+          {playing ? (
+            <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor" aria-hidden>
+              <rect x="1" y="1" width="2" height="6" />
+              <rect x="5" y="1" width="2" height="6" />
+            </svg>
+          ) : (
+            <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor" aria-hidden>
+              <path d="M1 0.5 L1 7.5 L7 4 Z" />
+            </svg>
+          )}
+          <span>{playing ? "stop" : "listen"}</span>
+        </button>
         <button
           onClick={() => setRecIdx((i) => Math.max(0, i - 1))}
           disabled={recIdx === 0}

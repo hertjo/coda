@@ -139,20 +139,20 @@ export default function RubatoPanel({ codas, features }: Props) {
         }
       });
 
-      // Stats line at the bottom.
+      // Stats line at the bottom: shortened so both fit on narrow panels.
       const sy = canvas.height - 8 * dpr;
-      ctx.fillStyle = ACCENT_CYAN;
       ctx.font = `${Math.round(10 * dpr)}px ui-monospace`;
+      ctx.fillStyle = ACCENT_CYAN;
       ctx.textAlign = "left";
       ctx.fillText(
-        `mean drift, adjacent same-class same-whale: ${(stats.adjacent * 1000).toFixed(1)} ms`,
+        `adjacent ${(stats.adjacent * 1000).toFixed(0)} ms`,
         pad,
         sy,
       );
       ctx.fillStyle = ACCENT_PINK;
       ctx.textAlign = "right";
       ctx.fillText(
-        `random same-class: ${(stats.random * 1000).toFixed(1)} ms`,
+        `random ${(stats.random * 1000).toFixed(0)} ms`,
         canvas.width - pad,
         sy,
       );

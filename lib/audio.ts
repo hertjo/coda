@@ -42,6 +42,17 @@ export function playCoda(icis: number[]): void {
 }
 
 function scheduleClick(audio: AudioContext, time: number): void {
+  scheduleClickAt(audio, time, 0, 4500, 0.35);
+}
+
+function scheduleClickAt(
+  audio: AudioContext,
+  time: number,
+  pan: number,
+  filterFreq: number,
+  gainValue: number,
+  destination?: AudioNode,
+): AudioBufferSourceNode {
   // Synthesised click: short burst of bandpassed noise with exponential decay.
   const duration = 0.012; // 12 ms
   const sampleCount = Math.floor(audio.sampleRate * duration);
@@ -55,13 +66,110 @@ function scheduleClick(audio: AudioContext, time: number): void {
   src.buffer = buffer;
   const filt = audio.createBiquadFilter();
   filt.type = "bandpass";
-  filt.frequency.value = 4500;
-  filt.Q.value = 1.6;
+  filt.frequency.value = filterFreq;
+  filt.Q.value = 1.8;
+  const panner = audio.createStereoPanner();
+  panner.pan.value = pan;
   const gain = audio.createGain();
-  gain.gain.value = 0.35;
+  gain.gain.value = gainValue;
   src.connect(filt);
-  filt.connect(gain);
-  gain.connect(audio.destination);
+  filt.connect(panner);
+  panner.connect(gain);
+  gain.connect(destination ?? audio.destination);
   src.start(time);
   src.stop(time + duration + 0.005);
+  return src;
+}
+
+export type DialogueEvent = {
+  startSec: number;
+  icis: number[];
+  whale: number;
+};
+
+export type DialogueController = {
+  stop: () => void;
+  startedAt: number; // audio context time when playback began
+  speed: number;
+  origin: number; // sim time of the first event
+};
+
+/**
+ * Play back a multi-whale dialogue by scheduling every click of every
+ * coda with stereo pan and bandpass-centre variation per whale, so the
+ * different speakers separate audibly even at high speedup factors.
+ *
+ *   pan       distributes whales across the stereo field from -0.85 to
+ *             +0.85; you can pick out who is on which side.
+ *   timbre    each whale gets a slightly different bandpass centre
+ *             (~3.0 to ~6.5 kHz spread), giving them distinct voices
+ *             reminiscent of body-size variation in real recordings.
+ *   speed     plays back faster than wall-clock so multi-minute
+ *             conversations are listenable in seconds.
+ */
+export function playDialogue(
+  events: DialogueEvent[],
+  speed = 6,
+): DialogueController | null {
+  if (events.length === 0) return null;
+  const audio = getCtx();
+  if (audio.state === "suspended") audio.resume();
+  const t0 = audio.currentTime + 0.08;
+  const origin = events[0].startSec;
+
+  // Master gain so stop() can ramp the whole stream to silence in a
+  // single cheap operation instead of cancelling every buffer source.
+  const master = audio.createGain();
+  master.gain.value = 1;
+  master.connect(audio.destination);
+
+  // Distinct whale ids in this recording.
+  const whaleIds = Array.from(new Set(events.map((e) => e.whale))).sort(
+    (a, b) => a - b,
+  );
+  const idxOf = new Map<number, number>(
+    whaleIds.map((w, i) => [w, i] as const),
+  );
+
+  const panOf = (whale: number) => {
+    const i = idxOf.get(whale) ?? 0;
+    if (whaleIds.length <= 1) return 0;
+    return ((i / (whaleIds.length - 1)) - 0.5) * 1.7;
+  };
+
+  const freqOf = (whale: number) => {
+    const i = idxOf.get(whale) ?? 0;
+    // 3.2 kHz to 6.6 kHz spread across whales.
+    if (whaleIds.length <= 1) return 4500;
+    return 3200 + (3400 * i) / (whaleIds.length - 1);
+  };
+
+  for (const ev of events) {
+    let clickTime = t0 + (ev.startSec - origin) / speed;
+    const pan = panOf(ev.whale);
+    const freq = freqOf(ev.whale);
+    scheduleClickAt(audio, clickTime, pan, freq, 0.18, master);
+    for (const ici of ev.icis) {
+      clickTime += ici / speed;
+      scheduleClickAt(audio, clickTime, pan, freq, 0.18, master);
+    }
+  }
+
+  return {
+    stop: () => {
+      master.gain.cancelScheduledValues(audio.currentTime);
+      master.gain.linearRampToValueAtTime(0, audio.currentTime + 0.05);
+    },
+    startedAt: t0,
+    speed,
+    origin,
+  };
+}
+
+export function audioContextTime(): number {
+  try {
+    return getCtx().currentTime;
+  } catch {
+    return 0;
+  }
 }
