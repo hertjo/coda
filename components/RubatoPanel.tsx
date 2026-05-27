@@ -48,15 +48,30 @@ function computeStats(
     byKey.set(key, list);
   }
   const adjacentDiffs: number[] = [];
-  const sampleSeries: number[][] = [];
+  const sampleCandidates: number[][] = [];
   for (const list of byKey.values()) {
     if (list.length < 4) continue;
     const durations = list.map((idx) => codas[idx].duration);
-    if (sampleSeries.length < 5) sampleSeries.push(durations);
+    sampleCandidates.push(durations);
     for (let j = 0; j < durations.length - 1; j++) {
       adjacentDiffs.push(durations[j + 1] - durations[j]);
     }
   }
+  // Pick the four most informative example sequences (longest enough to
+  // show drift, but capped so dense whales don't smear into a blob).
+  const MAX_SAMPLES = 4;
+  const MAX_LEN = 60;
+  const chosen = sampleCandidates
+    .filter((s) => s.length >= 10)
+    .sort((a, b) => b.length - a.length)
+    .slice(0, MAX_SAMPLES);
+  const sampleSeries: number[][] = chosen.map((s) => {
+    if (s.length <= MAX_LEN) return s;
+    const step = s.length / MAX_LEN;
+    const out: number[] = [];
+    for (let i = 0; i < MAX_LEN; i++) out.push(s[Math.floor(i * step)]);
+    return out;
+  });
 
   // Random same-tempo-class pairs: bigger sample so the histogram is smooth.
   const byTempo = new Map<number, number[]>();
@@ -243,19 +258,22 @@ export default function RubatoPanel({ codas, features }: Props) {
       // sequence is visible regardless of absolute duration.
       const seriesTop = canvas.height - pad - seriesH;
       const seriesBottom = canvas.height - pad - 4 * dpr;
-      const seriesPad = 3 * dpr;
+      const seriesPad = 10 * dpr;
       const seriesCount = Math.max(1, stats.series.length);
-      const subW = (histW - seriesPad * (seriesCount + 1)) / seriesCount;
+      const subW = (histW - seriesPad * (seriesCount - 1)) / seriesCount;
       const subH = seriesBottom - seriesTop;
 
-      ctx.fillStyle = "rgba(255,255,255,0.04)";
       for (let si = 0; si < seriesCount; si++) {
-        const x0 = pad + seriesPad + si * (subW + seriesPad);
+        const x0 = pad + si * (subW + seriesPad);
+        ctx.fillStyle = "rgba(255,255,255,0.05)";
         ctx.fillRect(x0, seriesTop, subW, subH);
+        ctx.strokeStyle = "rgba(86,224,255,0.18)";
+        ctx.lineWidth = 1 * dpr;
+        ctx.strokeRect(x0 + 0.5, seriesTop + 0.5, subW - 1, subH - 1);
       }
 
       stats.series.forEach((series, si) => {
-        const x0 = pad + seriesPad + si * (subW + seriesPad);
+        const x0 = pad + si * (subW + seriesPad);
         let lo = Infinity;
         let hi = -Infinity;
         for (const v of series) {
