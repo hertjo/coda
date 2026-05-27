@@ -72,7 +72,7 @@ export default function DialogueRibbon({ data }: Props) {
     }));
     setPlaying(true);
     try {
-      const ctrl = await playDialogue(events, 8);
+      const ctrl = await playDialogue(events, 12);
       controllerRef.current = ctrl;
     } catch (e) {
       console.error("[coda] playDialogue failed", e);
