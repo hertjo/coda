@@ -286,11 +286,11 @@ export default function RubatoPanel({ codas, features }: Props) {
         }
       });
 
-      ctx.fillStyle = "rgba(255,255,255,0.35)";
+      ctx.fillStyle = "rgba(255,255,255,0.4)";
       ctx.textAlign = "left";
       ctx.font = `${Math.round(9 * dpr)}px ui-sans-serif`;
       ctx.fillText(
-        "example sequences (each whale normalised to its own range)",
+        "duration over consecutive same-type codas, one whale per panel",
         pad,
         seriesTop - 4 * dpr,
       );

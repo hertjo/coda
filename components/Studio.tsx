@@ -138,11 +138,7 @@ function Body({
             recordings={dialogues.recordings.size}
           />
         </Panel>
-        <Panel
-          className="flex-1 min-h-[220px]"
-          title="rubato drift"
-          subtitle="paper fig 2c"
-        >
+        <Panel className="flex-1 min-h-[220px]" title="rubato drift">
           <RubatoPanel codas={codas} features={features.features} />
         </Panel>
       </aside>
