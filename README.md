@@ -3,7 +3,7 @@
 Interactive visualisation of the sperm whale phonetic alphabet proposed
 by Sharma et al. 2024.
 
-![coda studio](./public/demo.png)
+![coda studio](./public/demo.gif)
 
 ## Background
 
