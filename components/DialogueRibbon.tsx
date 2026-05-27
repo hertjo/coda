@@ -3,11 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DialogueCoda, DialogueDataset } from "@/lib/dataset";
 import { biolumin, rgbToCss } from "@/lib/colormap";
-import {
-  audioContextTime,
-  playDialogue,
-  type DialogueController,
-} from "@/lib/audio";
+import { playDialogue, type DialogueController } from "@/lib/audio";
 
 type Props = {
   data: DialogueDataset;
@@ -50,25 +46,16 @@ export default function DialogueRibbon({ data }: Props) {
     const loop = () => {
       setTick((t) => t + 1);
       const c = controllerRef.current;
-      if (c) {
-        const elapsedSim = (audioContextTime() - c.startedAt) * c.speed;
-        const simSpan =
-          rec && rec.list.length > 0
-            ? rec.list[rec.list.length - 1].startSeconds +
-              rec.list[rec.list.length - 1].duration -
-              rec.list[0].startSeconds
-            : 0;
-        if (elapsedSim >= simSpan + 0.4) {
-          controllerRef.current = null;
-          setPlaying(false);
-          return;
-        }
+      if (c && c.isDone()) {
+        controllerRef.current = null;
+        setPlaying(false);
+        return;
       }
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [playing, rec]);
+  }, [playing]);
 
   const togglePlay = () => {
     if (!rec) return;
@@ -83,7 +70,7 @@ export default function DialogueRibbon({ data }: Props) {
       icis: c.icis,
       whale: c.whale,
     }));
-    const ctrl = playDialogue(events, 6);
+    const ctrl = playDialogue(events, 8);
     controllerRef.current = ctrl;
     setPlaying(true);
   };
@@ -234,7 +221,7 @@ export default function DialogueRibbon({ data }: Props) {
       // Sweeping playback cursor.
       const ctrl = controllerRef.current;
       if (ctrl) {
-        const simNow = ctrl.origin + (audioContextTime() - ctrl.startedAt) * ctrl.speed;
+        const simNow = ctrl.getSimNow();
         if (simNow >= timeRange.t0 && simNow <= timeRange.t1) {
           const cx = project(simNow);
           const grad = ctx.createLinearGradient(cx - 18 * dpr, 0, cx + 18 * dpr, 0);

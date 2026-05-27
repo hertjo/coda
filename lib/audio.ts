@@ -89,9 +89,10 @@ export type DialogueEvent = {
 
 export type DialogueController = {
   stop: () => void;
-  startedAt: number; // audio context time when playback began
-  speed: number;
-  origin: number; // sim time of the first event
+  /** Returns the current sim-time position based on the playback clock. */
+  getSimNow: () => number;
+  /** True once the cursor has run past the last scheduled click. */
+  isDone: () => boolean;
 };
 
 /**
@@ -134,25 +135,65 @@ export function playDialogue(
   const panOf = (whale: number) => {
     const i = idxOf.get(whale) ?? 0;
     if (whaleIds.length <= 1) return 0;
-    return ((i / (whaleIds.length - 1)) - 0.5) * 1.7;
+    return ((i / (whaleIds.length - 1)) - 0.5) * 1.2;
   };
 
   const freqOf = (whale: number) => {
     const i = idxOf.get(whale) ?? 0;
-    // 3.2 kHz to 6.6 kHz spread across whales.
     if (whaleIds.length <= 1) return 4500;
     return 3200 + (3400 * i) / (whaleIds.length - 1);
   };
 
+  // Click train within a coda plays at real time so individual clicks
+  // are audible (real ICIs are 30 to 60 ms; speeding them up below 12 ms
+  // collapses them into noise). Between codas we compress the silences
+  // by `speed` so a multi-minute conversation does not take that long
+  // to play back.
+  const betweenCompress = Math.max(1, speed);
+
+  // Build a piecewise-linear map from audio real-time to sim-time so
+  // the dialogue ribbon cursor tracks the playback head exactly.
+  const waypoints: Array<{ real: number; sim: number }> = [];
+  waypoints.push({ real: t0, sim: origin });
+
+  let prevSimEnd = origin;
+  let realCursor = t0;
   for (const ev of events) {
-    let clickTime = t0 + (ev.startSec - origin) / speed;
+    const gap = Math.max(0, ev.startSec - prevSimEnd);
+    realCursor += gap / betweenCompress;
+    waypoints.push({ real: realCursor, sim: ev.startSec });
+
     const pan = panOf(ev.whale);
     const freq = freqOf(ev.whale);
-    scheduleClickAt(audio, clickTime, pan, freq, 0.18, master);
+    scheduleClickAt(audio, realCursor, pan, freq, 0.32, master);
+    let t = realCursor;
+    let simT = ev.startSec;
     for (const ici of ev.icis) {
-      clickTime += ici / speed;
-      scheduleClickAt(audio, clickTime, pan, freq, 0.18, master);
+      t += ici;
+      simT += ici;
+      scheduleClickAt(audio, t, pan, freq, 0.32, master);
     }
+    realCursor = t;
+    waypoints.push({ real: realCursor, sim: simT });
+    prevSimEnd = simT;
+  }
+  const endReal = realCursor + 0.2;
+
+  function simAt(realTime: number): number {
+    if (realTime <= waypoints[0].real) return waypoints[0].sim;
+    if (realTime >= waypoints[waypoints.length - 1].real) {
+      return waypoints[waypoints.length - 1].sim;
+    }
+    // Linear scan is fine for typical recording sizes (< a few hundred codas).
+    for (let i = 1; i < waypoints.length; i++) {
+      const a = waypoints[i - 1];
+      const b = waypoints[i];
+      if (realTime <= b.real) {
+        const f = (realTime - a.real) / Math.max(1e-6, b.real - a.real);
+        return a.sim + (b.sim - a.sim) * f;
+      }
+    }
+    return waypoints[waypoints.length - 1].sim;
   }
 
   return {
@@ -160,9 +201,8 @@ export function playDialogue(
       master.gain.cancelScheduledValues(audio.currentTime);
       master.gain.linearRampToValueAtTime(0, audio.currentTime + 0.05);
     },
-    startedAt: t0,
-    speed,
-    origin,
+    getSimNow: () => simAt(audio.currentTime),
+    isDone: () => audio.currentTime >= endReal,
   };
 }
 
