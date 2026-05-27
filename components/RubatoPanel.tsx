@@ -89,32 +89,42 @@ function computeStats(
 }
 
 const RANGE = 0.8; // s, x-axis half-width
-const BINS = 41;
+const BINS = 121;
+const KDE_BANDWIDTH = 0.025; // s, smoothing width for the kernel density estimate
 
-function histogram(values: number[], bins: number, lo: number, hi: number): Float32Array {
-  const counts = new Float32Array(bins);
-  if (values.length === 0) return counts;
+/**
+ * Gaussian kernel density estimate sampled on a uniform grid. Returns
+ * an array of length `bins`, normalised so its area integrates to 1.
+ * Smoothing avoids the pathology where a raw histogram puts almost
+ * every adjacent-rubato delta into a single zero-centred bin and
+ * crushes the rest of the y-axis.
+ */
+function kde(values: number[], bins: number, lo: number, hi: number, bandwidth: number): Float32Array {
+  const out = new Float32Array(bins);
+  if (values.length === 0) return out;
   const w = (hi - lo) / bins;
-  for (const v of values) {
-    if (v < lo || v >= hi) continue;
-    const idx = Math.min(bins - 1, Math.floor((v - lo) / w));
-    counts[idx]++;
+  const invSigma = 1 / bandwidth;
+  const norm = 1 / (bandwidth * Math.sqrt(2 * Math.PI));
+  for (let b = 0; b < bins; b++) {
+    const x = lo + (b + 0.5) * w;
+    let s = 0;
+    for (let i = 0; i < values.length; i++) {
+      const z = (x - values[i]) * invSigma;
+      s += Math.exp(-0.5 * z * z);
+    }
+    out[b] = (s / values.length) * norm;
   }
-  // Convert to density (area sums to 1).
-  let total = 0;
-  for (let i = 0; i < bins; i++) total += counts[i];
-  if (total > 0) for (let i = 0; i < bins; i++) counts[i] = counts[i] / (total * w);
-  return counts;
+  return out;
 }
 
 export default function RubatoPanel({ codas, features }: Props) {
   const stats = useMemo(() => computeStats(codas, features), [codas, features]);
   const adjHist = useMemo(
-    () => histogram(stats.adjacentDiffs, BINS, -RANGE, RANGE),
+    () => kde(stats.adjacentDiffs, BINS, -RANGE, RANGE, KDE_BANDWIDTH),
     [stats.adjacentDiffs],
   );
   const randHist = useMemo(
-    () => histogram(stats.randomDiffs, BINS, -RANGE, RANGE),
+    () => kde(stats.randomDiffs, BINS, -RANGE, RANGE, KDE_BANDWIDTH),
     [stats.randomDiffs],
   );
 
@@ -175,8 +185,8 @@ export default function RubatoPanel({ codas, features }: Props) {
       ctx.lineTo(xAt(0), histBottom);
       ctx.stroke();
 
-      // Helper to fill one distribution.
-      function fillHist(
+      // Filled smooth curve (kde) for each distribution.
+      function fillCurve(
         h: Float32Array,
         fill: string,
         stroke: string,
@@ -184,27 +194,23 @@ export default function RubatoPanel({ codas, features }: Props) {
         ctx.beginPath();
         ctx.moveTo(xAt(-RANGE), histBottom);
         for (let i = 0; i < BINS; i++) {
-          const lo = -RANGE + (i / BINS) * 2 * RANGE;
-          const hi = -RANGE + ((i + 1) / BINS) * 2 * RANGE;
-          const x0 = xAt(lo);
-          const x1 = xAt(hi);
+          const x = xAt(-RANGE + ((i + 0.5) / BINS) * 2 * RANGE);
           const y = yAt(h[i]);
-          ctx.lineTo(x0, y);
-          ctx.lineTo(x1, y);
+          ctx.lineTo(x, y);
         }
         ctx.lineTo(xAt(RANGE), histBottom);
         ctx.closePath();
         ctx.fillStyle = fill;
         ctx.fill();
         ctx.strokeStyle = stroke;
-        ctx.lineWidth = 1 * dpr;
+        ctx.lineWidth = 1.4 * dpr;
         ctx.stroke();
       }
 
       // Draw the broader (random) distribution first so the narrower
       // (adjacent) one sits in front.
-      fillHist(randHist, "rgba(86,176,255,0.20)", "rgba(120,190,255,0.85)");
-      fillHist(adjHist, "rgba(255,122,219,0.30)", "rgba(255,160,230,0.95)");
+      fillCurve(randHist, "rgba(86,176,255,0.20)", "rgba(120,190,255,0.85)");
+      fillCurve(adjHist, "rgba(255,122,219,0.30)", "rgba(255,160,230,0.95)");
 
       // X axis ticks.
       ctx.fillStyle = "rgba(255,255,255,0.45)";
@@ -232,27 +238,38 @@ export default function RubatoPanel({ codas, features }: Props) {
       ctx.fillStyle = "rgba(255,255,255,0.80)";
       ctx.fillText("random same-tempo", legX + 13 * dpr, legY + 14 * dpr);
 
-      // Example sequences strip at the bottom.
+      // Example sequences strip at the bottom: one row per whale, each
+      // row normalised to its own min..max so the drift inside each
+      // sequence is visible regardless of absolute duration.
       const seriesTop = canvas.height - pad - seriesH;
       const seriesBottom = canvas.height - pad - 4 * dpr;
-      const seriesPad = 4 * dpr;
-      ctx.fillStyle = "rgba(255,255,255,0.06)";
-      ctx.fillRect(pad, seriesTop, histW, seriesBottom - seriesTop);
+      const seriesPad = 3 * dpr;
+      const seriesCount = Math.max(1, stats.series.length);
+      const subW = (histW - seriesPad * (seriesCount + 1)) / seriesCount;
+      const subH = seriesBottom - seriesTop;
 
-      const allVals = stats.series.flat();
-      const sLo = Math.min(...allVals);
-      const sHi = Math.max(...allVals);
-      const sSpan = Math.max(0.01, sHi - sLo);
-      const subW = (histW - seriesPad * (stats.series.length + 1)) / Math.max(1, stats.series.length);
+      ctx.fillStyle = "rgba(255,255,255,0.04)";
+      for (let si = 0; si < seriesCount; si++) {
+        const x0 = pad + seriesPad + si * (subW + seriesPad);
+        ctx.fillRect(x0, seriesTop, subW, subH);
+      }
 
       stats.series.forEach((series, si) => {
         const x0 = pad + seriesPad + si * (subW + seriesPad);
+        let lo = Infinity;
+        let hi = -Infinity;
+        for (const v of series) {
+          if (v < lo) lo = v;
+          if (v > hi) hi = v;
+        }
+        const span = Math.max(0.01, hi - lo);
         const projX = (i: number) =>
           x0 + (i / (series.length - 1 || 1)) * subW;
         const projY = (v: number) =>
-          seriesBottom - ((v - sLo) / sSpan) * (seriesBottom - seriesTop - 6 * dpr) - 3 * dpr;
+          seriesBottom - 4 * dpr - ((v - lo) / span) * (subH - 8 * dpr);
+
         ctx.strokeStyle = "rgba(255,160,230,0.85)";
-        ctx.lineWidth = 1.3 * dpr;
+        ctx.lineWidth = 1.4 * dpr;
         ctx.beginPath();
         for (let i = 0; i < series.length; i++) {
           const x = projX(i);
@@ -264,7 +281,7 @@ export default function RubatoPanel({ codas, features }: Props) {
         ctx.fillStyle = "rgba(255,200,230,0.95)";
         for (let i = 0; i < series.length; i++) {
           ctx.beginPath();
-          ctx.arc(projX(i), projY(series[i]), 1.6 * dpr, 0, Math.PI * 2);
+          ctx.arc(projX(i), projY(series[i]), 1.7 * dpr, 0, Math.PI * 2);
           ctx.fill();
         }
       });
@@ -272,7 +289,11 @@ export default function RubatoPanel({ codas, features }: Props) {
       ctx.fillStyle = "rgba(255,255,255,0.35)";
       ctx.textAlign = "left";
       ctx.font = `${Math.round(9 * dpr)}px ui-sans-serif`;
-      ctx.fillText("example sequences", pad, seriesTop - 4 * dpr);
+      ctx.fillText(
+        "example sequences (each whale normalised to its own range)",
+        pad,
+        seriesTop - 4 * dpr,
+      );
 
       // Summary line.
       ctx.font = `${Math.round(10 * dpr)}px ui-monospace`;
