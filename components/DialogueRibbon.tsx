@@ -57,7 +57,7 @@ export default function DialogueRibbon({ data }: Props) {
     return () => cancelAnimationFrame(raf);
   }, [playing]);
 
-  const togglePlay = () => {
+  const togglePlay = async () => {
     if (!rec) return;
     if (playing) {
       controllerRef.current?.stop();
@@ -70,9 +70,14 @@ export default function DialogueRibbon({ data }: Props) {
       icis: c.icis,
       whale: c.whale,
     }));
-    const ctrl = playDialogue(events, 8);
-    controllerRef.current = ctrl;
     setPlaying(true);
+    try {
+      const ctrl = await playDialogue(events, 8);
+      controllerRef.current = ctrl;
+    } catch (e) {
+      console.error("[coda] playDialogue failed", e);
+      setPlaying(false);
+    }
   };
 
   const whales = useMemo(() => {

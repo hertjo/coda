@@ -53,8 +53,7 @@ function scheduleClickAt(
   gainValue: number,
   destination?: AudioNode,
 ): AudioBufferSourceNode {
-  // Synthesised click: short burst of bandpassed noise with exponential decay.
-  const duration = 0.012; // 12 ms
+  const duration = 0.012; // 12 ms click envelope
   const sampleCount = Math.floor(audio.sampleRate * duration);
   const buffer = audio.createBuffer(1, sampleCount, audio.sampleRate);
   const channel = buffer.getChannelData(0);
@@ -64,20 +63,32 @@ function scheduleClickAt(
   }
   const src = audio.createBufferSource();
   src.buffer = buffer;
+
   const filt = audio.createBiquadFilter();
   filt.type = "bandpass";
   filt.frequency.value = filterFreq;
   filt.Q.value = 1.8;
-  const panner = audio.createStereoPanner();
-  panner.pan.value = pan;
+
   const gain = audio.createGain();
   gain.gain.value = gainValue;
+
   src.connect(filt);
-  filt.connect(panner);
-  panner.connect(gain);
+
+  // StereoPannerNode is supported on every modern browser; if for any
+  // reason it is missing we fall back to a plain mono path so playback
+  // is never silent.
+  if (typeof audio.createStereoPanner === "function") {
+    const panner = audio.createStereoPanner();
+    panner.pan.value = pan;
+    filt.connect(panner);
+    panner.connect(gain);
+  } else {
+    filt.connect(gain);
+  }
   gain.connect(destination ?? audio.destination);
+
   src.start(time);
-  src.stop(time + duration + 0.005);
+  src.stop(time + duration + 0.05);
   return src;
 }
 
@@ -108,14 +119,25 @@ export type DialogueController = {
  *   speed     plays back faster than wall-clock so multi-minute
  *             conversations are listenable in seconds.
  */
-export function playDialogue(
+export async function playDialogue(
   events: DialogueEvent[],
   speed = 6,
-): DialogueController | null {
+): Promise<DialogueController | null> {
   if (events.length === 0) return null;
   const audio = getCtx();
-  if (audio.state === "suspended") audio.resume();
-  const t0 = audio.currentTime + 0.08;
+  // Awaiting resume is the only thing that reliably unlocks audio after
+  // a user gesture across chromium / safari / firefox.
+  if (audio.state === "suspended") {
+    try {
+      await audio.resume();
+    } catch {
+      // ignore; we'll still try to schedule.
+    }
+  }
+  console.log(
+    `[coda] dialogue start: ${events.length} events, ctx ${audio.state}, sr ${audio.sampleRate}`,
+  );
+  const t0 = audio.currentTime + 0.15;
   const origin = events[0].startSec;
 
   // Master gain so stop() can ramp the whole stream to silence in a
@@ -165,13 +187,13 @@ export function playDialogue(
 
     const pan = panOf(ev.whale);
     const freq = freqOf(ev.whale);
-    scheduleClickAt(audio, realCursor, pan, freq, 0.32, master);
+    scheduleClickAt(audio, realCursor, pan, freq, 0.5, master);
     let t = realCursor;
     let simT = ev.startSec;
     for (const ici of ev.icis) {
       t += ici;
       simT += ici;
-      scheduleClickAt(audio, t, pan, freq, 0.32, master);
+      scheduleClickAt(audio, t, pan, freq, 0.5, master);
     }
     realCursor = t;
     waypoints.push({ real: realCursor, sim: simT });
