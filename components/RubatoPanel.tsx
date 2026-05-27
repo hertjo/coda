@@ -36,6 +36,7 @@ function computeStats(
   adjacentDiffs: number[];
   randomDiffs: number[];
   series: number[][];
+  shuffledSeries: number[][];
   meanAbsAdj: number;
   meanAbsRand: number;
 } {
@@ -73,6 +74,26 @@ function computeStats(
     return out;
   });
 
+  // For each example series build a deterministically shuffled twin
+  // using a Fisher-Yates pass with a fixed seed. Same set of duration
+  // values, just emitted in a random order; this is what the sequence
+  // would look like if the whale had no rubato.
+  function shuffle(arr: number[], seed: number): number[] {
+    const out = arr.slice();
+    let s = seed >>> 0;
+    for (let i = out.length - 1; i > 0; i--) {
+      s = (s * 1664525 + 1013904223) >>> 0;
+      const j = s % (i + 1);
+      const t = out[i];
+      out[i] = out[j];
+      out[j] = t;
+    }
+    return out;
+  }
+  const shuffledSeries: number[][] = sampleSeries.map((s, i) =>
+    shuffle(s, 0xc0da + i),
+  );
+
   // Random same-tempo-class pairs: bigger sample so the histogram is smooth.
   const byTempo = new Map<number, number[]>();
   for (let i = 0; i < codas.length; i++) {
@@ -98,6 +119,7 @@ function computeStats(
     adjacentDiffs,
     randomDiffs,
     series: sampleSeries,
+    shuffledSeries,
     meanAbsAdj: meanAbs(adjacentDiffs),
     meanAbsRand: meanAbs(randomDiffs),
   };
@@ -295,6 +317,28 @@ export default function RubatoPanel({ codas, features }: Props) {
         const projY = (v: number) =>
           seriesBottom - 4 * dpr - ((v - lo) / span) * (subH - 8 * dpr);
 
+        // First pass: the same values reshuffled, drawn as a faint
+        // white dotted line. This is what the sequence would look like
+        // if the codas had no temporal correlation. It should look
+        // jagged compared to the real (pink) line.
+        const shuffled = stats.shuffledSeries[si];
+        if (shuffled) {
+          ctx.save();
+          ctx.setLineDash([2 * dpr, 3 * dpr]);
+          ctx.strokeStyle = "rgba(255,255,255,0.55)";
+          ctx.lineWidth = 1 * dpr;
+          ctx.beginPath();
+          for (let i = 0; i < shuffled.length; i++) {
+            const x = projX(i);
+            const y = projY(shuffled[i]);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        // Second pass: the real sequence, in the panel's signature pink.
         const tone = SERIES_HUES[si % SERIES_HUES.length];
         ctx.strokeStyle = tone.line;
         ctx.lineWidth = 1.4 * dpr;
