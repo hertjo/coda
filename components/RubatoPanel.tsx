@@ -49,24 +49,73 @@ function computeStats(
     byKey.set(key, list);
   }
   const adjacentDiffs: number[] = [];
-  const sampleCandidates: number[][] = [];
+  const sampleCandidates: Array<{
+    durations: number[];
+    tempoClass: number;
+    whaleId: number;
+  }> = [];
   for (const list of byKey.values()) {
     if (list.length < 4) continue;
     const durations = list.map((idx) => codas[idx].duration);
-    sampleCandidates.push(durations);
+    sampleCandidates.push({
+      durations,
+      tempoClass: features[list[0]].tempoClass,
+      whaleId: codas[list[0]].whaleId,
+    });
     for (let j = 0; j < durations.length - 1; j++) {
       adjacentDiffs.push(durations[j + 1] - durations[j]);
     }
   }
-  // Pick the five most informative example sequences (longest enough to
-  // show drift, but capped so dense whales don't smear into a blob).
+
+  // Population spread (in seconds) for each tempo class, used both to
+  // rank candidate sequences and to score how visibly tight a whale's
+  // cell is compared to the broader same-tempo population.
+  const poolByTempo = new Map<number, number[]>();
+  for (let i = 0; i < codas.length; i++) {
+    const t = features[i].tempoClass;
+    const arr = poolByTempo.get(t) ?? [];
+    arr.push(codas[i].duration);
+    poolByTempo.set(t, arr);
+  }
+  const poolSpread = new Map<number, number>();
+  for (const [t, arr] of poolByTempo.entries()) {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const v of arr) {
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    poolSpread.set(t, hi - lo);
+  }
+
+  // Pick the five most informative example sequences. Prefer cells
+  // where the within-cell duration spread is much smaller than the
+  // same-tempo population spread, so the visual contrast between the
+  // pink walk and the white reference line is meaningful. Length is a
+  // secondary preference (long enough to show drift, capped to MAX_LEN).
   const MAX_SAMPLES = 5;
   const MAX_LEN = 60;
-  const chosen = sampleCandidates
-    .filter((s) => s.length >= 10)
-    .sort((a, b) => b.length - a.length)
-    .slice(0, MAX_SAMPLES);
-  const sampleSeries: number[][] = chosen.map((s) => {
+  const scored = sampleCandidates
+    .filter((c) => c.durations.length >= 10)
+    .map((c) => {
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (const v of c.durations) {
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      }
+      const cellSpread = Math.max(1e-6, hi - lo);
+      const pool = poolSpread.get(c.tempoClass) ?? cellSpread;
+      const tightness = cellSpread / pool; // <1 means cell is tighter than pool
+      return { ...c, tightness };
+    })
+    // Anything tighter than this ratio is a panel where the contrast
+    // between the whale's walk and the broader population will read.
+    .filter((c) => c.tightness < 0.55)
+    .sort((a, b) => b.durations.length - a.durations.length);
+  const chosenTop = scored.slice(0, MAX_SAMPLES);
+  const sampleSeries: number[][] = chosenTop.map((c) => {
+    const s = c.durations;
     if (s.length <= MAX_LEN) return s;
     const step = s.length / MAX_LEN;
     const out: number[] = [];
@@ -74,25 +123,36 @@ function computeStats(
     return out;
   });
 
-  // For each example series build a deterministically shuffled twin
-  // using a Fisher-Yates pass with a fixed seed. Same set of duration
-  // values, just emitted in a random order; this is what the sequence
-  // would look like if the whale had no rubato.
-  function shuffle(arr: number[], seed: number): number[] {
-    const out = arr.slice();
+  // Deterministic uniform sample using a small LCG.
+  function lcg(seed: number): () => number {
     let s = seed >>> 0;
-    for (let i = out.length - 1; i > 0; i--) {
+    return () => {
       s = (s * 1664525 + 1013904223) >>> 0;
-      const j = s % (i + 1);
-      const t = out[i];
-      out[i] = out[j];
-      out[j] = t;
+      return s / 0xffffffff;
+    };
+  }
+  // Reference line per panel: same length as the real series, but each
+  // point is an independent draw from same-tempo codas produced by
+  // OTHER whales. Excluding this whale's own contributions keeps the
+  // pool from being dominated by the cell we're comparing against, so
+  // the reference really represents "what other whales of this tempo
+  // sound like".
+  const shuffledSeries: number[][] = chosenTop.map((c, i) => {
+    const pool: number[] = [];
+    for (let k = 0; k < codas.length; k++) {
+      if (features[k].tempoClass !== c.tempoClass) continue;
+      if (codas[k].whaleId === c.whaleId) continue;
+      pool.push(codas[k].duration);
+    }
+    if (pool.length === 0) return sampleSeries[i].slice();
+    const rng = lcg(0xc0da + i);
+    const len = sampleSeries[i].length;
+    const out: number[] = new Array(len);
+    for (let k = 0; k < len; k++) {
+      out[k] = pool[Math.floor(rng() * pool.length)];
     }
     return out;
-  }
-  const shuffledSeries: number[][] = sampleSeries.map((s, i) =>
-    shuffle(s, 0xc0da + i),
-  );
+  });
 
   // Random same-tempo-class pairs: bigger sample so the histogram is smooth.
   const byTempo = new Map<number, number[]>();
@@ -305,9 +365,14 @@ export default function RubatoPanel({ codas, features }: Props) {
 
       stats.series.forEach((series, si) => {
         const x0 = pad + si * (subW + seriesPad);
+        const ref = stats.shuffledSeries[si] ?? [];
         let lo = Infinity;
         let hi = -Infinity;
         for (const v of series) {
+          if (v < lo) lo = v;
+          if (v > hi) hi = v;
+        }
+        for (const v of ref) {
           if (v < lo) lo = v;
           if (v > hi) hi = v;
         }
@@ -317,10 +382,11 @@ export default function RubatoPanel({ codas, features }: Props) {
         const projY = (v: number) =>
           seriesBottom - 4 * dpr - ((v - lo) / span) * (subH - 8 * dpr);
 
-        // First pass: the same values reshuffled, drawn as a faint
-        // white dotted line. This is what the sequence would look like
-        // if the codas had no temporal correlation. It should look
-        // jagged compared to the real (pink) line.
+        // First pass: a reference line drawn from independent random
+        // samples of the same-tempo population. With no rubato the
+        // sequence would look like this: jagged and using the wider
+        // population range, not the narrow per-whale-per-class band
+        // that the real (pink) line traces.
         const shuffled = stats.shuffledSeries[si];
         if (shuffled) {
           ctx.save();
@@ -362,7 +428,7 @@ export default function RubatoPanel({ codas, features }: Props) {
       ctx.textAlign = "left";
       ctx.font = `${Math.round(9 * dpr)}px ui-sans-serif`;
       ctx.fillText(
-        "duration over consecutive same-type codas, one whale per panel",
+        "pink: real consecutive codas  ·  white dotted: independent same-tempo samples",
         pad,
         seriesTop - 4 * dpr,
       );
