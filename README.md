@@ -35,8 +35,8 @@ data and lets you explore the structure directly.
 | phonetic alphabet | 18 rhythm clusters × 5 tempo modes, glow encodes the count of codas in the cell, pink wedge encodes the ornament rate. Paper figure 3. |
 | click pattern | the click train of the focal coda, ICIs labelled in milliseconds. Two playback buttons: one synthesises the exact click train from this coda's data, the other plays a public-domain NOAA recording. |
 | recorded dialogue | dataset 2 timestamps as per-whale lanes; dotted lines mark turn-taking exchanges within 2 seconds. Paper figure 1. |
-| rubato drift | duration of consecutive same-class codas per whale, showing the smooth modulation Sharma found. Paper figure 2c. |
-| whale dialects | one point per whale, two-component PCA of each whale's full feature profile (mean tempo, rhythm histogram, ornament rate, rubato drift, log coda count). Coloured by social unit. Hover for the whale's stats. |
+| rubato drift | duration histogram of adjacent same-class pairs (pink) vs random same-tempo pairs (blue), plus five example walks. In each walk the pink line traces the actual sequence from one whale and the white dotted line shows independent draws from the broader same-tempo population, so the whale's narrow band sits inside a much wider scatter. Paper figure 2c. |
+| whale dialects | one point per whale, three-dimensional UMAP (with a PCA toggle) of each whale's full feature profile (mean tempo, rhythm histogram, ornament rate, rubato drift, log coda count). Coloured by social unit. Hover for the whale's stats. |
 | selected cell | drill-down on the highlighted rhythm-tempo combination: codas, distinct whales, mean duration, top coda labels. |
 
 ## Stack
@@ -90,14 +90,21 @@ The four-feature decomposition is implemented in `lib/features.ts`:
   * **ornamentation** is detected when the final ICI exceeds the median
     of the preceding ICIs by a tuned ratio. The resulting rate is about
     4%, matching the paper.
-  * **rubato** is implemented in `components/RubatoPanel.tsx` as the
-    mean absolute difference in duration across consecutive same-class
-    same-whale pairs vs random same-class pairs.
+  * **rubato** is implemented in `components/RubatoPanel.tsx`. The
+    histogram compares the absolute duration difference between
+    consecutive same-class same-whale pairs against random pairs from
+    the same tempo class. The example walks pick five whale-class
+    cells whose internal duration spread is much tighter than the
+    same-tempo population, then plot the real sequence alongside an
+    independent reference drawn from other whales of the same tempo
+    class. The contrast between the narrow pink band and the wider
+    white scatter is the rubato signal.
 
-The whale-dialect scatter uses a deterministic two-component PCA
-(`lib/pca.ts`, power iteration on the centred and standardised
-covariance matrix) rather than UMAP or t-SNE. With ~60 whales and ~22
-features the local-neighbour graph that UMAP relies on is too sparse
-to be reliable, and PCA's preservation of global distance is what we
-want for a hypothesis about between-unit separation. The trade-off:
-PCA will miss any non-linear sub-structure within a unit.
+The whale-dialect scatter defaults to a seeded three-dimensional UMAP
+(`umap-js`, deterministic via a fixed PRNG seed) which surfaces the
+non-linear sub-structure between social units more clearly than PCA
+on this small ~60-whale sample. A PCA toggle is wired up too,
+implemented in `lib/pca.ts` as power iteration with deflation on the
+centred and standardised covariance matrix. PCA preserves global
+distance and is useful for comparing how strongly the unit labels
+fall out under a strictly linear projection.
