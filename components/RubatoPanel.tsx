@@ -57,9 +57,9 @@ function computeStats(
       adjacentDiffs.push(durations[j + 1] - durations[j]);
     }
   }
-  // Pick the four most informative example sequences (longest enough to
+  // Pick the five most informative example sequences (longest enough to
   // show drift, but capped so dense whales don't smear into a blob).
-  const MAX_SAMPLES = 4;
+  const MAX_SAMPLES = 5;
   const MAX_LEN = 60;
   const chosen = sampleCandidates
     .filter((s) => s.length >= 10)
@@ -106,6 +106,15 @@ function computeStats(
 const RANGE = 0.8; // s, x-axis half-width
 const BINS = 121;
 const KDE_BANDWIDTH = 0.025; // s, smoothing width for the kernel density estimate
+
+// Five distinguishable pink/magenta hues for the example-sequence panels.
+const SERIES_HUES = [
+  { line: "rgba(255,122,219,0.95)", dot: "rgba(255,200,235,1.0)" },
+  { line: "rgba(255,160,180,0.95)", dot: "rgba(255,210,220,1.0)" },
+  { line: "rgba(220,110,255,0.95)", dot: "rgba(235,190,255,1.0)" },
+  { line: "rgba(255,90,160,0.95)",  dot: "rgba(255,175,210,1.0)" },
+  { line: "rgba(255,180,235,0.95)", dot: "rgba(255,225,250,1.0)" },
+];
 
 /**
  * Gaussian kernel density estimate sampled on a uniform grid. Returns
@@ -286,7 +295,8 @@ export default function RubatoPanel({ codas, features }: Props) {
         const projY = (v: number) =>
           seriesBottom - 4 * dpr - ((v - lo) / span) * (subH - 8 * dpr);
 
-        ctx.strokeStyle = "rgba(255,160,230,0.85)";
+        const tone = SERIES_HUES[si % SERIES_HUES.length];
+        ctx.strokeStyle = tone.line;
         ctx.lineWidth = 1.4 * dpr;
         ctx.beginPath();
         for (let i = 0; i < series.length; i++) {
@@ -296,7 +306,7 @@ export default function RubatoPanel({ codas, features }: Props) {
           else ctx.lineTo(x, y);
         }
         ctx.stroke();
-        ctx.fillStyle = "rgba(255,200,230,0.95)";
+        ctx.fillStyle = tone.dot;
         for (let i = 0; i < series.length; i++) {
           ctx.beginPath();
           ctx.arc(projX(i), projY(series[i]), 1.7 * dpr, 0, Math.PI * 2);
